@@ -27,6 +27,7 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
+import com.google.gson.internal.ConstructorConstructor;
 import com.google.gwtjsonrpc.common.AsyncCallback;
 import com.google.gwtjsonrpc.common.JsonConstants;
 import com.google.gwtjsonrpc.common.RemoteJsonService;
@@ -94,6 +95,7 @@ public abstract class JsonServlet<CallType extends ActiveCall> extends HttpServl
 
   /** Create a default GsonBuilder with some extra types defined. */
   public static GsonBuilder defaultGsonBuilder() {
+    ConstructorConstructor constructorConstructor = new ConstructorConstructor(new HashMap<>());
     final GsonBuilder gb = new GsonBuilder();
     gb.registerTypeAdapter(
         java.util.Set.class,
@@ -103,7 +105,8 @@ public abstract class JsonServlet<CallType extends ActiveCall> extends HttpServl
             return new HashSet<>();
           }
         });
-    gb.registerTypeAdapter(java.util.Map.class, new MapDeserializer());
+    gb.registerTypeAdapterFactory(new MBMapTypeAdapterFactory(constructorConstructor));
+    //gb.registerTypeAdapter(java.util.Map.class, new MapDeserializer());
     gb.registerTypeAdapter(java.sql.Date.class, new SqlDateDeserializer());
     gb.registerTypeAdapter(java.sql.Timestamp.class, new SqlTimestampDeserializer());
     return gb;
@@ -534,7 +537,9 @@ public abstract class JsonServlet<CallType extends ActiveCall> extends HttpServl
             }
 
             final JsonObject r = new JsonObject();
-            r.add(src.versionName, src.versionValue);
+            if (src.versionName != null) {
+              r.add(src.versionName, src.versionValue);
+            }
             if (src.id != null) {
               r.add("id", src.id);
             }
@@ -543,15 +548,25 @@ public abstract class JsonServlet<CallType extends ActiveCall> extends HttpServl
             }
             if (src.externalFailure != null) {
               final JsonObject error = new JsonObject();
+              final String aMessage = src.externalFailure.getMessage();
+              final String aCause = src.externalFailure.getCause() != null ? src.externalFailure.getCause().getMessage() : null;
               if ("jsonrpc".equals(src.versionName)) {
                 final int code = to2_0ErrorCode(src);
 
                 error.addProperty("code", code);
-                error.addProperty("message", src.externalFailure.getMessage());
+                error.addProperty("message", aMessage);
+                if (aCause != null && !aCause.isEmpty())
+                {
+                  error.addProperty("cause", aCause);
+                }
               } else {
                 error.addProperty("name", "JSONRPCError");
                 error.addProperty("code", 999);
-                error.addProperty("message", src.externalFailure.getMessage());
+                error.addProperty("message", aMessage);
+                if (aCause != null && !aCause.isEmpty())
+                {
+                  error.addProperty("cause", aCause);
+                }
               }
               r.add("error", error);
             } else {

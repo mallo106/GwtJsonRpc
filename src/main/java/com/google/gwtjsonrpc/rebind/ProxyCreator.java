@@ -188,9 +188,11 @@ class ProxyCreator {
         deserializerCreator.create(branch, resultType.isArray());
       } else if (resultType.isPrimitive() == null
           && !SerializerCreator.isBoxedPrimitive(resultType))
+      {
         // Non primitives get deserialized by their normal serializer
         serializerCreator.create(resultType, branch);
-      // (Boxed)Primitives are left, they are handled specially
+        // (Boxed)Primitives are left, they are handled specially
+      }
     }
   }
 
@@ -479,7 +481,7 @@ class ProxyCreator {
     }
 
     JParameterizedType isGeneric = type.isParameterized();
-    if (isGeneric != null) {
+    if (isGeneric != null && !type.isAbstract() && type.isInterface() == null) {
       for (JClassType param : isGeneric.getTypeArgs()) {
         className += "_";
         className += param.getQualifiedSourceName().replace('.', '_');

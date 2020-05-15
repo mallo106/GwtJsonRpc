@@ -19,32 +19,19 @@ import com.google.gwt.core.client.JsonUtils;
 import com.google.gwt.core.ext.GeneratorContext;
 import com.google.gwt.core.ext.TreeLogger;
 import com.google.gwt.core.ext.UnableToCompleteException;
-import com.google.gwt.core.ext.typeinfo.JClassType;
-import com.google.gwt.core.ext.typeinfo.JField;
-import com.google.gwt.core.ext.typeinfo.JPackage;
-import com.google.gwt.core.ext.typeinfo.JPrimitiveType;
-import com.google.gwt.core.ext.typeinfo.JType;
+import com.google.gwt.core.ext.typeinfo.*;
 import com.google.gwt.user.rebind.ClassSourceFileComposerFactory;
 import com.google.gwt.user.rebind.SourceWriter;
 import com.google.gwtjsonrpc.client.impl.JsonSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.EnumSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.JavaLangString_JsonSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.JavaSqlDate_JsonSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.JavaSqlTimestamp_JsonSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.JavaUtilDate_JsonSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.ListSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.ObjectArraySerializer;
-import com.google.gwtjsonrpc.client.impl.ser.ObjectMapSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.ObjectSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.PrimitiveArraySerializer;
-import com.google.gwtjsonrpc.client.impl.ser.SetSerializer;
-import com.google.gwtjsonrpc.client.impl.ser.StringMapSerializer;
+import com.google.gwtjsonrpc.client.impl.ser.*;
+import com.google.gwtjsonrpc.client.impl.ser.BoxedPrimitives.*;
+import com.google.gwtjsonrpc.common.SkipSerialization;
+
 import java.io.PrintWriter;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 class SerializerCreator {
   private static final String SER_SUFFIX = "_JsonSerializer";
@@ -76,24 +63,60 @@ class SerializerCreator {
         java.sql.Timestamp.class.getCanonicalName(),
         JavaSqlTimestamp_JsonSerializer.class.getCanonicalName());
 
+    //boxed primitive serializers for Lists and maps of boxed primitives
+    defaultSerializers.put(
+        java.lang.Boolean.class.getCanonicalName(),
+        BooleanSerializer.class.getCanonicalName());
+    defaultSerializers.put(
+        java.lang.Byte.class.getCanonicalName(),
+        ByteSerializer.class.getCanonicalName());
+    defaultSerializers.put(
+        java.lang.Character.class.getCanonicalName(),
+        CharacterSerializer.class.getCanonicalName());
+    defaultSerializers.put(
+        java.lang.Double.class.getCanonicalName(),
+        DoubleSerializer.class.getCanonicalName());
+    defaultSerializers.put(
+        java.lang.Float.class.getCanonicalName(),
+        FloatSerializer.class.getCanonicalName());
+    defaultSerializers.put(
+        java.lang.Integer.class.getCanonicalName(),
+        IntegerSerializer.class.getCanonicalName());
+    defaultSerializers.put(
+        java.lang.Long.class.getCanonicalName(),
+        LongSerializer.class.getCanonicalName());
+    defaultSerializers.put(
+        java.lang.Long.class.getCanonicalName(),
+        ShortSerializer.class.getCanonicalName());
+
     parameterizedSerializers.put(
         java.util.List.class.getCanonicalName(), ListSerializer.class.getCanonicalName());
     parameterizedSerializers.put(
+        java.util.ArrayList.class.getCanonicalName(), ListSerializer.class.getCanonicalName());
+    parameterizedSerializers.put(
         java.util.Map.class.getCanonicalName(), ObjectMapSerializer.class.getCanonicalName());
     parameterizedSerializers.put(
+        java.util.HashMap.class.getCanonicalName(), ObjectMapSerializer.class.getCanonicalName());
+    parameterizedSerializers.put(
         java.util.Set.class.getCanonicalName(), SetSerializer.class.getCanonicalName());
+    parameterizedSerializers.put(
+        java.util.HashSet.class.getCanonicalName(), SetSerializer.class.getCanonicalName());
   }
 
   private final HashMap<String, String> generatedSerializers;
+  private final HashMap<String, String> queuedForGeneration;
+  private final Set<String> canSerialize;
   private final GeneratorContext context;
   private JClassType targetType;
 
   SerializerCreator(final GeneratorContext c) {
     context = c;
     generatedSerializers = new HashMap<>();
+    queuedForGeneration = new HashMap<>();
+    canSerialize = new HashSet<>();
   }
 
-  String create(final JClassType targetType, final TreeLogger logger)
+  String create(JClassType targetType, final TreeLogger logger)
       throws UnableToCompleteException {
     if (targetType.isParameterized() != null || targetType.isArray() != null) {
       ensureSerializersForTypeParameters(logger, targetType);
@@ -102,32 +125,42 @@ class SerializerCreator {
     if (sClassName != null) {
       return sClassName;
     }
-
+    if (targetType.getQualifiedSourceName().startsWith("com.extjs.gxt.ui.client.data.BeanModel")) {
+      //Don't throw an exception, but also don't create a serializer for this class
+      return null;
+    }
     checkCanSerialize(logger, targetType, true);
-    recursivelyCreateSerializers(logger, targetType);
+    final String sn = getSerializerQualifiedName(targetType);
+    String aQSN = getQualifiedSourceName(targetType);
+
+    if (!queuedForGeneration.containsKey(aQSN))
+    {
+      queuedForGeneration.put(aQSN, sn);
+      //logger.log(TreeLogger.WARN, "Create: " + getQualifiedSourceName(targetType));
+      recursivelyCreateSerializers(logger, targetType);
+    } else
+    {
+      return sn;
+    }
 
     this.targetType = targetType;
     final SourceWriter srcWriter = getSourceWriter(logger, context);
-    final String sn = getSerializerQualifiedName(targetType);
-    if (!generatedSerializers.containsKey(targetType.getQualifiedSourceName())) {
-      generatedSerializers.put(targetType.getQualifiedSourceName(), sn);
+    if (!generatedSerializers.containsKey(aQSN)) {
+      generatedSerializers.put(aQSN, sn);
     }
     if (srcWriter == null) {
       return sn;
     }
 
-    if (!targetType.isAbstract()) {
-      generateSingleton(srcWriter);
-    }
+    generateSingleton(srcWriter);
     if (targetType.isEnum() != null) {
       generateEnumFromJson(srcWriter);
     } else {
       generateInstanceMembers(srcWriter);
-      generatePrintJson(srcWriter);
-      generateFromJson(srcWriter);
+      generatePrintJson(srcWriter, logger);
+      generateFromJson(srcWriter, logger);
       generateGetSets(srcWriter);
     }
-
     srcWriter.commit(logger);
     return sn;
   }
@@ -138,13 +171,23 @@ class SerializerCreator {
       return;
     }
 
-    final JClassType targetClass = targetType.isClass();
-    if (needsSuperSerializer(targetClass)) {
-      create(targetClass.getSuperclass(), logger);
+    JClassType targetClass = targetType.isClass();
+    final boolean isClass = targetClass != null;
+    if (!isClass) {
+      targetClass = targetType.isInterface();
     }
-
-    for (final JField f : sortFields(targetClass)) {
-      ensureSerializer(logger, f.getType());
+    if (isClass && needsSuperSerializer(targetClass)) {
+      final TreeLogger branch =
+          logger.branch(TreeLogger.DEBUG, "Create Super from " + getQualifiedSourceName(targetType));
+      create(targetClass.getSuperclass(), branch);
+    }
+    for (final JClassType f : getSortedSubTypes(targetClass, logger)) {
+      create(f, logger.branch(TreeLogger.DEBUG, "Create Subclass from " + getQualifiedSourceName(targetType)));
+    }
+    if (isClass) {
+      for (final JField f : sortFields(targetClass)) {
+        ensureSerializer(logger, f.getType());
+      }
     }
   }
 
@@ -154,12 +197,16 @@ class SerializerCreator {
       return;
     }
 
-    final String qsn = type.getQualifiedSourceName();
-    if (defaultSerializers.containsKey(qsn) || parameterizedSerializers.containsKey(qsn)) {
+    if(getQualifiedSourceName(type).equals("java.lang.Object")) {
       return;
     }
 
-    create((JClassType) type, logger);
+    final String qsn = getQualifiedSourceName(type);
+    if (defaultSerializers.containsKey(qsn) || parameterizedSerializers.containsKey(type.getQualifiedSourceName())) {
+      return;
+    }
+
+    create((JClassType) type, logger.branch(TreeLogger.DEBUG, "EnsureSerializer " + getQualifiedSourceName(type)));
   }
 
   private boolean ensureSerializersForTypeParameters(final TreeLogger logger, final JType type)
@@ -184,22 +231,21 @@ class SerializerCreator {
 
   void checkCanSerialize(final TreeLogger logger, final JType type)
       throws UnableToCompleteException {
-    checkCanSerialize(logger, type, false);
+    checkCanSerialize(logger, type, true);
   }
 
   void checkCanSerialize(final TreeLogger logger, final JType type, boolean allowAbstractType)
       throws UnableToCompleteException {
-    if (type.isPrimitive() == JPrimitiveType.LONG) {
-      logger.log(TreeLogger.ERROR, "Type 'long' not supported in JSON encoding", null);
-      throw new UnableToCompleteException();
+    if (type.getQualifiedSourceName().startsWith("com.extjs.gxt.ui.client.data.BeanModel")) {
+      //Don't throw an exception, but also don't create a serializer for this class
+      return;
     }
-
     if (type.isPrimitive() == JPrimitiveType.VOID) {
       logger.log(TreeLogger.ERROR, "Type 'void' not supported in JSON encoding", null);
       throw new UnableToCompleteException();
     }
 
-    final String qsn = type.getQualifiedSourceName();
+    final String qsn = getQualifiedSourceName(type);
     if (type.isEnum() != null) {
       return;
     }
@@ -234,24 +280,30 @@ class SerializerCreator {
     if (type.isParameterized() != null) {
       final JClassType[] typeArgs = type.isParameterized().getTypeArgs();
       for (final JClassType t : typeArgs) {
-        checkCanSerialize(logger, t);
+        // Check for a recursive structure
+        if (canSerialize.contains(getQualifiedSourceName(t))) {
+          continue;
+        }
+        final TreeLogger branch =
+            logger.branch(TreeLogger.DEBUG, "In type " + qsn + ", ParameterizedType " + t.getName());
+        checkCanSerialize(branch, t);
       }
-      if (parameterizedSerializers.containsKey(qsn)) {
+      if (parameterizedSerializers.containsKey(type.getQualifiedSourceName())) {
         return;
       }
-    } else if (parameterizedSerializers.containsKey(qsn)) {
+    } else if (parameterizedSerializers.containsKey(type.getQualifiedSourceName())) {
       logger.log(TreeLogger.ERROR, "Type " + qsn + " requires type paramter(s)", null);
       throw new UnableToCompleteException();
     }
 
-    if (qsn.startsWith("java.") || qsn.startsWith("javax.")) {
-      logger.log(
-          TreeLogger.ERROR, "Standard type " + qsn + " not supported in JSON encoding", null);
-      throw new UnableToCompleteException();
+    if (qsn.equals("java.lang.Object"))
+    {
+      return;
     }
 
-    if (type.isInterface() != null) {
-      logger.log(TreeLogger.ERROR, "Interface " + qsn + " not supported in JSON encoding", null);
+    if (qsn.startsWith("java.") || qsn.startsWith("javax.")) {
+      logger.log(
+          TreeLogger.ERROR, "Standard type " + qsn + " not supported in JSON encoding. Target: " + targetType.getName(), null);
       throw new UnableToCompleteException();
     }
 
@@ -260,6 +312,7 @@ class SerializerCreator {
       logger.log(TreeLogger.ERROR, "Abstract type " + qsn + " not supported here", null);
       throw new UnableToCompleteException();
     }
+    canSerialize.add(qsn);
     for (final JField f : sortFields(ct)) {
       final TreeLogger branch =
           logger.branch(TreeLogger.DEBUG, "In type " + qsn + ", field " + f.getName());
@@ -276,7 +329,7 @@ class SerializerCreator {
 
       return ObjectArraySerializer.class.getCanonicalName()
           + "<"
-          + componentType.getQualifiedSourceName()
+          + getQualifiedSourceName(componentType)
           + ">";
     }
 
@@ -284,13 +337,21 @@ class SerializerCreator {
       return StringMapSerializer.class.getName();
     }
 
-    final String qsn = t.getQualifiedSourceName();
+    if (isPrimitiveMap(t)) {
+      return PrimitiveMapSerializer.class.getName();
+    }
+
+    final String qsn = getQualifiedSourceName(t);
     if (defaultSerializers.containsKey(qsn)) {
       return defaultSerializers.get(qsn);
     }
 
-    if (parameterizedSerializers.containsKey(qsn)) {
-      return parameterizedSerializers.get(qsn);
+    if (parameterizedSerializers.containsKey(t.getQualifiedSourceName())) {
+      return parameterizedSerializers.get(t.getQualifiedSourceName());
+    }
+
+    if (queuedForGeneration.containsKey(qsn)) {
+      return queuedForGeneration.get(qsn);
     }
 
     return generatedSerializers.get(qsn);
@@ -301,12 +362,24 @@ class SerializerCreator {
         && t.getErasedType().isClassOrInterface() != null
         && t.isParameterized().getTypeArgs().length > 0
         && t.isParameterized()
-            .getTypeArgs()[0]
-            .getQualifiedSourceName()
-            .equals(String.class.getName())
+        .getTypeArgs()[0]
+        .getQualifiedSourceName()
+        .equals(String.class.getName())
         && t.getErasedType()
-            .isClassOrInterface()
-            .isAssignableTo(context.getTypeOracle().findType(Map.class.getName()));
+        .isClassOrInterface()
+        .isAssignableTo(context.getTypeOracle().findType(Map.class.getName()));
+  }
+
+  private boolean isPrimitiveMap(final JType t) {
+    return t.isParameterized() != null
+        && t.getErasedType().isClassOrInterface() != null
+        && t.isParameterized().getTypeArgs().length > 0
+        && (t.isParameterized().getTypeArgs()[0].isPrimitive() != null
+          || t.isParameterized().getTypeArgs()[0].getQualifiedSourceName().equals(String.class.getName())
+          || isBoxedPrimitive(t.isParameterized().getTypeArgs()[0]))
+        && t.getErasedType()
+        .isClassOrInterface()
+        .isAssignableTo(context.getTypeOracle().findType(Map.class.getName()));
   }
 
   private void generateSingleton(final SourceWriter w) {
@@ -323,8 +396,16 @@ class SerializerCreator {
       final JType ft = f.getType();
       if (needsTypeParameter(ft)) {
         final String serType = serializerFor(ft);
-        w.print("private final ");
+        w.print("private ");
         w.print(serType);
+        String aGenericType = getTypedQualifiedSourceName(ft);
+        if (aGenericType.indexOf("<") >= 0) {
+          aGenericType = aGenericType.substring(aGenericType.indexOf("<"));
+          if (serType.equals(StringMapSerializer.class.getName())) {
+            aGenericType = "<" + aGenericType.substring(aGenericType.indexOf(", ") + 2, aGenericType.lastIndexOf(">") + 1);
+          }
+          w.print(aGenericType);
+        }
         w.print(" ");
         w.print("ser_" + f.getName());
         w.print(" = ");
@@ -366,7 +447,7 @@ class SerializerCreator {
       w.print(")");
 
     } else {
-      w.print(serializerFor(type) + ".INSTANCE");
+        w.print(serializerFor(type) + ".INSTANCE");
     }
   }
 
@@ -374,18 +455,26 @@ class SerializerCreator {
     for (final JField f : sortFields(targetType)) {
       if (f.isPrivate()) {
         w.print("private static final native ");
-        w.print(f.getType().getQualifiedSourceName());
+
+        if (isLong(f.getType())) {
+          w.print("java.lang.String");
+        } else {
+          w.print(getTypedQualifiedSourceName(f.getType()));
+        }
         w.print(" objectGet_" + f.getName());
         w.print("(");
-        w.print(targetType.getQualifiedSourceName() + " instance");
+        w.print(getQualifiedSourceName(targetType) + " instance");
         w.print(")");
         w.println("/*-{ ");
         w.indent();
 
         w.print("return instance.@");
-        w.print(targetType.getQualifiedSourceName());
+        w.print(getQualifiedSourceName(targetType));
         w.print("::");
         w.print(f.getName());
+        if (isLong(f.getType())) {
+          w.print(" + \"\"");
+        }
         w.println(";");
 
         w.outdent();
@@ -394,14 +483,14 @@ class SerializerCreator {
         w.print("private static final native void ");
         w.print(" objectSet_" + f.getName());
         w.print("(");
-        w.print(targetType.getQualifiedSourceName() + " instance, ");
-        w.print(f.getType().getQualifiedSourceName() + " value");
+        w.print(getQualifiedSourceName(targetType) + " instance, ");
+        w.print(getTypedQualifiedSourceName(f.getType()) + " value");
         w.print(")");
         w.println("/*-{ ");
         w.indent();
 
         w.print("instance.@");
-        w.print(targetType.getQualifiedSourceName());
+        w.print(getQualifiedSourceName(targetType));
         w.print("::");
         w.print(f.getName());
         w.println(" = value;");
@@ -438,10 +527,12 @@ class SerializerCreator {
         w.println("}");
       } else {
         w.print("private static final native ");
-        if (f.getType().isArray() != null) {
+        if (isLong(f.getType())) {
+          w.print("java.lang.String");
+        } else if (f.getType().isArray() != null) {
           w.print("JavaScriptObject");
         } else if (isJsonPrimitive(f.getType())) {
-          w.print(f.getType().getQualifiedSourceName());
+          w.print(getQualifiedSourceName(f.getType()));
         } else if (isBoxedPrimitive(f.getType())) {
           w.print(boxedTypeToPrimitiveTypeName(f.getType()));
         } else {
@@ -453,7 +544,10 @@ class SerializerCreator {
         w.indent();
 
         w.print("return instance.");
-        w.print(f.getName());
+        w.print(getPrettyFieldName(f.getName()));
+        if (isLong(f.getType())) {
+          w.print(" + \"\"");
+        }
         w.println(";");
 
         w.outdent();
@@ -466,11 +560,11 @@ class SerializerCreator {
 
   private void generateEnumFromJson(final SourceWriter w) {
     w.print("public ");
-    w.print(targetType.getQualifiedSourceName());
+    w.print(getQualifiedSourceName(targetType));
     w.println(" fromJson(Object in) {");
     w.indent();
     w.print("return in != null");
-    w.print(" ? " + targetType.getQualifiedSourceName() + ".valueOf((String)in)");
+    w.print(" ? " + getQualifiedSourceName(targetType) + ".valueOf((String)in)");
     w.print(" : null");
     w.println(";");
     w.outdent();
@@ -478,22 +572,46 @@ class SerializerCreator {
     w.println();
   }
 
-  private void generatePrintJson(final SourceWriter w) {
+  private void generatePrintJson(final SourceWriter w, TreeLogger theLogger) {
     final JField[] fieldList = sortFields(targetType);
     w.print("protected int printJsonImpl(int fieldCount, StringBuilder sb, ");
     w.println("Object instance) {");
     w.indent();
+    w.println("return printTypeCheckedJsonImpl(fieldCount, sb, instance, true);");
+    w.outdent();
+    w.println("}");
+
+    w.print("public int printTypeCheckedJsonImpl(int fieldCount, StringBuilder sb, ");
+    w.println("Object instance, boolean doCheckType) {");
+    w.indent();
+
+    w.println("if (doCheckType) {");
+    w.indent();
+    List<JClassType> aSubTypes = getSubTypes(targetType, theLogger);
+    if (aSubTypes.size() > 0 )
+    {
+      w.println("switch (instance.getClass().getName()){");
+      w.indent();
+      aSubTypes.forEach(aSubClass -> {
+        w.println("case \"" + getQualifiedSourceName(aSubClass) + "\" : return " + getSerializerQualifiedName(aSubClass) + ".INSTANCE.printTypeCheckedJsonImpl(fieldCount, sb, instance, false);");
+      });
+      w.outdent();
+      w.println("}");
+      w.println();
+    }
+    w.outdent();
+    w.println("}");
 
     w.print("final ");
-    w.print(targetType.getQualifiedSourceName());
+    w.print(getTypedQualifiedSourceName(targetType));
     w.print(" src = (");
-    w.print(targetType.getQualifiedSourceName());
+    w.print(getTypedQualifiedSourceName(targetType));
     w.println(")instance;");
 
     if (needsSuperSerializer(targetType)) {
-      w.print("fieldCount = super.printJsonImpl(fieldCount, sb, (");
-      w.print(targetType.getSuperclass().getQualifiedSourceName());
-      w.println(")src);");
+      w.print("fieldCount = super.printTypeCheckedJsonImpl(fieldCount, sb, (");
+      w.print(getTypedQualifiedSourceName(targetType.getSuperclass()));
+      w.println(")src, false);");
     }
 
     final String docomma = "if (fieldCount++ > 0) sb.append(\",\");";
@@ -505,7 +623,7 @@ class SerializerCreator {
         doget = "src." + f.getName();
       }
 
-      final String doname = "sb.append(\"\\\"" + f.getName() + "\\\":\");";
+      final String doname = "sb.append(\"\\\"" + getPrettyFieldName(f.getName()) + "\\\":\");";
       if (f.getType() == JPrimitiveType.CHAR || isBoxedCharacter(f.getType())) {
         w.println(docomma);
         w.println(doname);
@@ -531,11 +649,24 @@ class SerializerCreator {
         w.println(docomma);
         w.println(doname);
         if (needsTypeParameter(f.getType())) {
+          w.println("try{");
+          w.indent();
           w.print("ser_" + f.getName());
+          w.println(".printJson(sb, " + doget + ");");
+          w.outdent();
+          w.println("} catch(Exception anE){");
+          w.indent();
+          w.print("ser_" + f.getName() + " = ");
+          generateSerializerReference(f.getType(), w);
+          w.println(";");
+          w.print("ser_" + f.getName());
+          w.println(".printJson(sb, " + doget + ");");
+          w.outdent();
+          w.println("}");
         } else {
           w.print(serializerFor(f.getType()) + ".INSTANCE");
+          w.println(".printJson(sb, " + doget + ");");
         }
-        w.println(".printJson(sb, " + doget + ");");
         w.outdent();
         w.println("}");
         w.println();
@@ -548,104 +679,178 @@ class SerializerCreator {
     w.println();
   }
 
-  private void generateFromJson(final SourceWriter w) {
+  private void generateFromJson(final SourceWriter w, TreeLogger theLogger) {
     w.print("public ");
-    w.print(targetType.getQualifiedSourceName());
+    w.print(getTypedQualifiedSourceName(targetType));
     w.println(" fromJson(Object in) {");
     w.indent();
-    if (targetType.isAbstract()) {
-      w.println("throw new UnsupportedOperationException();");
+
+    w.println("if (in == null) return null;");
+    w.println("final JavaScriptObject jso = (JavaScriptObject)in;");
+    w.print("final ");
+    w.print(getTypedQualifiedSourceName(targetType));
+    if (targetType.isAbstract() || targetType.isInterface() != null) {
+      w.println(" dst = null; ");
     } else {
-      w.println("if (in == null) return null;");
-      w.println("final JavaScriptObject jso = (JavaScriptObject)in;");
-      w.print("final ");
-      w.print(targetType.getQualifiedSourceName());
       w.print(" dst = new ");
-      w.println(targetType.getQualifiedSourceName() + "();");
-      w.println("fromJsonImpl(jso, dst);");
-      w.println("return dst;");
+      w.println(getTypedQualifiedSourceName(targetType) + "();");
     }
+    w.println("return fromJsonImpl(jso, dst);");
+
     w.outdent();
     w.println("}");
     w.println();
 
-    w.print("protected void fromJsonImpl(JavaScriptObject jso,");
-    w.print(targetType.getQualifiedSourceName());
+    w.print("public " + getTypedQualifiedSourceName(targetType) + " fromJsonImpl(JavaScriptObject jso, ");
+    w.print(getTypedQualifiedSourceName(targetType));
     w.println(" dst) {");
     w.indent();
+    w.println("return fromJsonImpl(jso, dst, true);");
+    w.outdent();
+    w.println("}");
+    w.println();
+
+    // this is the only part thats really MB specific, but its kinda the foundation we need to do this fromJson
+    // when were creating an object from JSON we need the type to determine what kind of object it should be
+    w.println("static native String objectType(JavaScriptObject responseObject)");
+    w.println("/*-{ return responseObject._type_; }-*/;");
+    w.println();
+
+    w.print("public " + getTypedQualifiedSourceName(targetType) + " fromJsonImpl(JavaScriptObject jso, ");
+    w.print(getTypedQualifiedSourceName(targetType));
+    w.println(" dst, boolean doCheckType) {");
+    w.indent();
+
+    w.println("if (doCheckType) {");
+    w.indent();
+    List<JClassType> aSubTypes = getSubTypes(targetType, theLogger);
+    if (aSubTypes.size() > 0 )
+    {
+      w.println("switch (objectType(jso)){");
+      w.indent();
+      aSubTypes.forEach(aSubClass -> {
+        w.print("case \"" + getQualifiedSourceName(aSubClass) + "\" : dst = ");
+        w.print(getSerializerQualifiedName(aSubClass) + ".INSTANCE.fromJsonImpl(jso, ");
+        w.print("new " + getQualifiedSourceName(aSubClass));
+        w.print("(), false);");
+        w.println("break;");
+      });
+      w.outdent();
+      w.println("}");
+    }
+    w.outdent();
+    w.println("}");
 
     if (needsSuperSerializer(targetType)) {
       w.print("super.fromJsonImpl(jso, (");
-      w.print(targetType.getSuperclass().getQualifiedSourceName());
-      w.println(")dst);");
+      w.print(getTypedQualifiedSourceName(targetType.getSuperclass()));
+      w.println(")dst, false);");
     }
 
     for (final JField f : sortFields(targetType)) {
       final String doget = "jsonGet_" + f.getName() + "(jso)";
       final String doset0, doset1;
 
-      if (f.isPrivate()) {
-        doset0 = "objectSet_" + f.getName() + "(dst, ";
-        doset1 = ")";
-      } else {
-        doset0 = "dst." + f.getName() + " = ";
-        doset1 = "";
-      }
-
-      if (f.getType().isArray() != null) {
-        final JType ct = f.getType().isArray().getComponentType();
-        w.println("if (" + doget + " != null) {");
+      if (f.getType().isArray() != null || needsTypeParameter(f.getType()))
+      {
+        w.println("try{");
         w.indent();
-
-        w.print("final ");
-        w.print(ct.getQualifiedSourceName());
-        w.print("[] tmp = new ");
-        w.print(ct.getQualifiedSourceName());
-        w.print("[");
-        w.print(ObjectArraySerializer.class.getName());
-        w.print(".size(" + doget + ")");
-        w.println("];");
-
-        w.println("ser_" + f.getName() + ".fromJson(" + doget + ", tmp);");
-
-        w.print(doset0);
-        w.print("tmp");
-        w.print(doset1);
+        writeFieldSetter(w, f);
+        w.outdent();
+        w.println("} catch(Exception anE){");
+        w.indent();
+        w.print("ser_" + f.getName() + " = ");
+        generateSerializerReference(f.getType(), w);
         w.println(";");
-
+        writeFieldSetter(w, f);
         w.outdent();
         w.println("}");
-
-      } else if (isJsonPrimitive(f.getType())) {
-        w.print(doset0);
-        w.print(doget);
-        w.print(doset1);
-        w.println(";");
-
-      } else if (isBoxedPrimitive(f.getType())) {
-        w.print(doset0);
-        w.print("new " + f.getType().getQualifiedSourceName() + "(");
-        w.print(doget);
-        w.print(")");
-        w.print(doset1);
-        w.println(";");
-
       } else {
-        w.print(doset0);
-        if (needsTypeParameter(f.getType())) {
-          w.print("ser_" + f.getName());
-        } else {
-          w.print(serializerFor(f.getType()) + ".INSTANCE");
-        }
-        w.print(".fromJson(" + doget + ")");
-        w.print(doset1);
-        w.println(";");
+        writeFieldSetter(w, f);
       }
     }
 
+    w.println("return dst;");
     w.outdent();
     w.println("}");
     w.println();
+  }
+
+  private void writeFieldSetter(final SourceWriter w, JField f)
+  {
+    final String doget = "jsonGet_" + f.getName() + "(jso)";
+    final String doset0, doset1;
+
+    if (f.isPrivate()) {
+      doset0 = "objectSet_" + f.getName() + "(dst, ";
+      doset1 = ")";
+    } else {
+      doset0 = "dst." +f.getName() + " = ";
+      doset1 = "";
+    }
+    if (f.getType().isArray() != null) {
+      final JType ct = f.getType().isArray().getComponentType();
+      w.println("if (" + doget + " != null) {");
+      w.indent();
+
+      w.print("final ");
+      w.print(getQualifiedSourceName(ct));
+      w.print("[] tmp = new ");
+      w.print(getQualifiedSourceName(ct));
+      w.print("[");
+      w.print(ObjectArraySerializer.class.getName());
+      w.print(".size(" + doget + ")");
+      w.println("];");
+
+      w.println("ser_" + f.getName() + ".fromJson(" + doget + ", tmp);");
+
+      w.print(doset0);
+      w.print("tmp");
+      w.print(doset1);
+      w.println(";");
+
+      w.outdent();
+      w.println("}");
+
+    } else if (isJsonPrimitive(f.getType())) {
+      w.print(doset0);
+      if (isLong(f.getType())) {
+        w.print("Long.parseLong(");
+        w.print(doget);
+        w.print(")");
+      } else {
+        w.print(doget);
+      }
+      w.print(doset1);
+      w.println(";");
+
+    } else if (isBoxedPrimitive(f.getType())) {
+      w.print(doset0);
+      if (isLong(f.getType())) {
+        w.print("Long.parseLong(");
+      } else {
+        w.print("new " + getQualifiedSourceName(f.getType()) + "(");
+      }
+      w.print(doget);
+      w.print(")");
+      w.print(doset1);
+      w.println(";");
+
+    } else {
+      w.print(doset0);
+      if (needsTypeParameter(f.getType())) {
+        if (f.getType().isInterface() == null)
+        {
+          w.print("(" + getTypedQualifiedSourceName(f.getType()) + ")");
+        }
+        w.print("ser_" + f.getName());
+      } else {
+        w.print(serializerFor(f.getType()) + ".INSTANCE");
+      }
+      w.print(".fromJson(" + doget + ")");
+      w.print(doset1);
+      w.println(";");
+    }
   }
 
   static boolean isJsonPrimitive(final JType t) {
@@ -658,6 +863,7 @@ class SerializerCreator {
         || qsn.equals(Byte.class.getCanonicalName())
         || isBoxedCharacter(t)
         || qsn.equals(Double.class.getCanonicalName())
+        || qsn.equals(Long.class.getCanonicalName())
         || qsn.equals(Float.class.getCanonicalName())
         || qsn.equals(Integer.class.getCanonicalName())
         || qsn.equals(Short.class.getCanonicalName());
@@ -667,12 +873,17 @@ class SerializerCreator {
     return t.getQualifiedSourceName().equals(Character.class.getCanonicalName());
   }
 
+  static boolean isLong(JType t) {
+    return t == JPrimitiveType.LONG || t.getQualifiedSourceName().equals(Long.class.getCanonicalName());
+  }
+
   private String boxedTypeToPrimitiveTypeName(JType t) {
     final String qsn = t.getQualifiedSourceName();
     if (qsn.equals(Boolean.class.getCanonicalName())) return "boolean";
     if (qsn.equals(Byte.class.getCanonicalName())) return "byte";
     if (qsn.equals(Character.class.getCanonicalName())) return "java.lang.String";
     if (qsn.equals(Double.class.getCanonicalName())) return "double";
+    if (qsn.equals(Long.class.getCanonicalName())) return "java.lang.String";
     if (qsn.equals(Float.class.getCanonicalName())) return "float";
     if (qsn.equals(Integer.class.getCanonicalName())) return "int";
     if (qsn.equals(Short.class.getCanonicalName())) return "short";
@@ -701,20 +912,20 @@ class SerializerCreator {
     if (targetType.isEnum() != null) {
       cf.addImport(EnumSerializer.class.getCanonicalName());
       cf.setSuperclass(
-          EnumSerializer.class.getSimpleName() + "<" + targetType.getQualifiedSourceName() + ">");
+          EnumSerializer.class.getSimpleName() + "<" + getQualifiedSourceName(targetType) + ">");
     } else if (needsSuperSerializer(targetType)) {
       cf.setSuperclass(getSerializerQualifiedName(targetType.getSuperclass()));
     } else {
       cf.addImport(ObjectSerializer.class.getCanonicalName());
       cf.setSuperclass(
-          ObjectSerializer.class.getSimpleName() + "<" + targetType.getQualifiedSourceName() + ">");
+          ObjectSerializer.class.getSimpleName() + "<" + getTypedQualifiedSourceName(targetType) + ">");
     }
     return cf.createSourceWriter(ctx, pw);
   }
 
   private static boolean needsSuperSerializer(JClassType type) {
     JClassType t = type.getSuperclass();
-    while (!Object.class.getName().equals(t.getQualifiedSourceName())) {
+    while (t != null && !Object.class.getName().equals(getQualifiedSourceName(t))) {
       if (sortFields(t).length > 0) {
         return true;
       }
@@ -723,10 +934,12 @@ class SerializerCreator {
     return false;
   }
 
-  private String getSerializerQualifiedName(final JClassType targetType) {
+  private String getSerializerQualifiedName(final JClassType theTargetType) {
     final String[] name;
-    name = ProxyCreator.synthesizeTopLevelClassName(targetType, SER_SUFFIX);
-    return name[0].length() == 0 ? name[1] : name[0] + "." + name[1];
+    name = ProxyCreator.synthesizeTopLevelClassName(theTargetType, SER_SUFFIX);
+    String aName = name[0].length() == 0 ? name[1] : name[0] + "." + name[1];
+    int anExtends = aName.indexOf(" extends ");
+    return anExtends >= 0 ? aName.substring(anExtends + " extends ".length()) : aName;
   }
 
   private String getSerializerSimpleName() {
@@ -736,17 +949,118 @@ class SerializerCreator {
   static boolean needsTypeParameter(final JType ft) {
     return ft.isArray() != null
         || (ft.isParameterized() != null
-            && parameterizedSerializers.containsKey(ft.getQualifiedSourceName()));
+        && parameterizedSerializers.containsKey(ft.getQualifiedSourceName()));
   }
 
   private static JField[] sortFields(final JClassType targetType) {
     final ArrayList<JField> r = new ArrayList<>();
     for (final JField f : targetType.getFields()) {
+      if (f.isAnnotationPresent(SkipSerialization.class)) {
+        continue;
+      }
       if (!f.isStatic() && !f.isTransient() && !f.isFinal()) {
         r.add(f);
       }
     }
     Collections.sort(r, FIELD_COMP);
     return r.toArray(new JField[r.size()]);
+  }
+
+  private final List<JClassType>getSubTypes(final JClassType targetType, TreeLogger theLogger) {
+    String anOriginal = getSortedSubTypes(targetType, theLogger).stream()
+        .map(aSubType -> aSubType.getName())
+        .reduce((a,b) -> a + ", " + b).orElse("none");
+    //theLogger.log(TreeLogger.WARN, targetType.getName() + " All " + anOriginal);
+    return getSortedSubTypes(targetType, theLogger).stream()
+        .filter(aSubType -> !(aSubType.isAbstract()
+            || aSubType.isInterface() != null
+            || aSubType.getQualifiedSourceName().startsWith("com.extjs.gxt")))
+        .collect(Collectors.toList());
+  }
+
+  private final Set<JClassType>getSortedSubTypes(JClassType targetType, TreeLogger theLogger) {
+    JClassType aRefreshed = context.getTypeOracle().findType(targetType.getPackage().getName(), targetType.getName());
+    //theLogger.log(TreeLogger.WARN, targetType.getQualifiedSourceName() + " -> " + (aRefreshed != null ? aRefreshed.getQualifiedSourceName() : null));
+    targetType = aRefreshed != null ? aRefreshed : targetType;
+    //theLogger.log(TreeLogger.WARN, "getSortedSubTypes:qsn:" + targetType.getQualifiedSourceName());
+    String anImmediateSubTypeOf = targetType.getQualifiedSourceName().indexOf(" extends ") > 0 ? getQualifiedSourceName(targetType) : targetType.getQualifiedSourceName();
+
+    //Add all ImmediateSubTypes First
+    Set<JClassType> aSortedSubTypes = new HashSet();
+    aSortedSubTypes.addAll(Arrays.asList(targetType.getSubtypes()).stream()
+        .filter(aJClassType -> {
+          try
+          {
+            return aJClassType.getSuperclass().getQualifiedSourceName().equals(anImmediateSubTypeOf);
+          } catch (Exception anE) {
+            return false;
+          }
+        })
+        .collect(Collectors.toList()));
+    aSortedSubTypes.addAll(Arrays.asList(targetType.getSubtypes()));
+    return aSortedSubTypes;
+  }
+
+  public static String getQualifiedSourceName(JType theType) {
+    String aQSN = theType.getQualifiedSourceName();
+    int anExtends = aQSN.indexOf(" extends ");
+    String aFixed = anExtends >= 0 ? aQSN.substring(anExtends + " extends ".length()) : aQSN;
+
+    JParameterizedType isGeneric = theType.isParameterized();
+    JClassType aClass = theType.isClassOrInterface();
+    if (isGeneric != null && !aClass.isAbstract() && aClass.isInterface() == null) {
+      for (JClassType param : isGeneric.getTypeArgs()) {
+        aFixed += "_";
+        aFixed += param.getQualifiedSourceName().replace('.', '_');
+      }
+    }
+    return aFixed;
+  }
+
+  public static String getTypedQualifiedSourceName(JType theType) {
+    String aQSN = theType.getQualifiedSourceName();
+    int anExtends = aQSN.indexOf(" extends ");
+    String aFixed = anExtends >= 0 ? aQSN.substring(anExtends + " extends ".length()) : aQSN;
+
+    JParameterizedType isGeneric = theType.isParameterized();
+    JClassType aClass = theType.isClassOrInterface();
+    if (isGeneric != null && !aClass.isAbstract() && aClass.isInterface() == null) {
+      aFixed += getTypeWithDefinedGenerics(theType);
+    }
+    return aFixed;
+  }
+
+  private static String getTypeWithDefinedGenerics(JType theType) {
+    return "<" +
+        Arrays.asList(theType.isParameterized().getTypeArgs()).stream()
+        .map(aType -> {
+          String aParameters = aType.getQualifiedSourceName();
+          JClassType aClass = theType.isClassOrInterface();
+          if (aType.isParameterized() != null && !aClass.isAbstract() && aClass.isInterface() == null)
+          {
+            aParameters += getTypeWithDefinedGenerics(aType);
+          }
+          return aParameters;
+        })
+        .reduce((a, b) -> a + ", " + b)
+        .orElse("")
+        + ">";
+  }
+
+  private static Pattern kPropertyPattern = Pattern.compile("^(my([A-Z])).*");
+
+  /**
+   * MediaBeacon used the variable name prefix 'my' to indicate the variable is a global to that object
+   * we should simplify this so our rpc calls look prettier
+   * @param theName
+   * @return
+   */
+  private static String getPrettyFieldName(String theName) {
+    Matcher aPropertyNameMatcher = kPropertyPattern.matcher(theName);
+    if (!aPropertyNameMatcher.matches())
+    {
+      return theName;
+    }
+    return theName.replace(aPropertyNameMatcher.group(1), aPropertyNameMatcher.group(2).toLowerCase());
   }
 }

@@ -392,6 +392,13 @@ limitations under the License.
       <version>${gwtVersion}</version>
       <scope>provided</scope>
     </dependency>
+
+      <!-- https://mvnrepository.com/artifact/com.google.jsinterop/base -->
+      <dependency>
+          <groupId>com.google.jsinterop</groupId>
+          <artifactId>base</artifactId>
+          <version>1.0.0-RC1</version>
+      </dependency>
   </dependencies>
 
   <repositories>

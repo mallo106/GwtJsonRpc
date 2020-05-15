@@ -60,6 +60,11 @@ public abstract class AbstractJsonProxy implements JsonDefTarget {
     xsrfManager = m;
   }
 
+  public void setRpcToken(String theRpcToken)
+  {
+    xsrfManager.setToken(this, theRpcToken);
+  }
+
   @Override
   public void setRpcRequestBuilder(RpcRequestBuilder builder) {
     if (builder != null)

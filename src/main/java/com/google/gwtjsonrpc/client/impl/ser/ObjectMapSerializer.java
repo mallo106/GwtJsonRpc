@@ -41,19 +41,31 @@ public class ObjectMapSerializer<K, V> extends JsonSerializer<java.util.Map<K, V
 
   @Override
   public void printJson(final StringBuilder sb, final java.util.Map<K, V> o) {
-    sb.append('[');
+    sb.append('{');
     boolean first = true;
-    for (final Map.Entry<K, V> e : o.entrySet()) {
+    sb.append("\"keys\":[");
+    for (K aKey : o.keySet()) {
       if (first) {
         first = false;
       } else {
         sb.append(',');
       }
-      encode(sb, keySerializer, e.getKey());
-      sb.append(',');
-      encode(sb, valueSerializer, e.getValue());
+      encode(sb, keySerializer, aKey);
+    }
+    sb.append("],");
+
+    sb.append("\"values\":[");
+    first = true;
+    for (V aValue : o.values()) {
+      if (first) {
+        first = false;
+      } else {
+        sb.append(',');
+      }
+      encode(sb, valueSerializer, aValue);
     }
     sb.append(']');
+    sb.append('}');
   }
 
   private static <T> void encode(
@@ -72,13 +84,8 @@ public class ObjectMapSerializer<K, V> extends JsonSerializer<java.util.Map<K, V
     }
 
     final JavaScriptObject jso = (JavaScriptObject) o;
-    final int n = size(jso);
     final HashMap<K, V> r = new HashMap<>();
-    for (int i = 0; i < n; ) {
-      final K k = keySerializer.fromJson(get(jso, i++));
-      final V v = valueSerializer.fromJson(get(jso, i++));
-      r.put(k, v);
-    }
+    copy(r, jso);
     return r;
   }
 
@@ -88,7 +95,13 @@ public class ObjectMapSerializer<K, V> extends JsonSerializer<java.util.Map<K, V
     return result == null ? null : fromJson(result);
   }
 
-  private static final native int size(JavaScriptObject o) /*-{ return o.length; }-*/;
+  private native void copy(Map<K, V> r, JavaScriptObject jsObject)/*-{
+    for (var i in jsObject.keys) {
+      this.@com.google.gwtjsonrpc.client.impl.ser.ObjectMapSerializer::copyOne(Ljava/util/Map;Ljava/lang/Object;Ljava/lang/Object;)(r, jsObject.keys[i], jsObject.values[i]);
+    }
+  }-*/ ;
 
-  private static final native Object get(JavaScriptObject o, int i) /*-{ return o[i]; }-*/;
+  void copyOne(final Map<K, V> r, final Object k, final Object o) {
+    r.put(keySerializer.fromJson(k), valueSerializer.fromJson(o));
+  }
 }

@@ -58,6 +58,10 @@ public class PrimitiveArraySerializer {
     printJsonWithToString(sb, o);
   }
 
+  public void printJson(final StringBuilder sb, final Long[] o) {
+    printJsonWithToString(sb, o);
+  }
+
   public void printJson(final StringBuilder sb, final Float[] o) {
     printJsonWithToString(sb, o);
   }
@@ -161,6 +165,9 @@ public class PrimitiveArraySerializer {
   private static final native double getDouble(JavaScriptObject jso, int pos)
       /*-{ return jso[pos]; }-*/ ;
 
+  private static final native Long getLong(JavaScriptObject jso, int pos)
+    /*-{ return jso[pos]; }-*/ ;
+
   private static final native float getFloat(JavaScriptObject jso, int pos)
       /*-{ return jso[pos]; }-*/ ;
 
@@ -192,6 +199,12 @@ public class PrimitiveArraySerializer {
   public void fromJson(final JavaScriptObject jso, final Double[] r) {
     for (int i = 0; i < r.length; i++) {
       r[i] = getDouble(jso, i);
+    }
+  }
+
+  public void fromJson(final JavaScriptObject jso, final Long[] r) {
+    for (int i = 0; i < r.length; i++) {
+      r[i] = getLong(jso, i);
     }
   }
 

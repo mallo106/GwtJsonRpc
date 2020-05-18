@@ -45,11 +45,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Pattern;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -96,19 +92,20 @@ public abstract class JsonServlet<CallType extends ActiveCall> extends HttpServl
   /** Create a default GsonBuilder with some extra types defined. */
   public static GsonBuilder defaultGsonBuilder() {
     ConstructorConstructor constructorConstructor = new ConstructorConstructor(new HashMap<>());
-    final GsonBuilder gb = new GsonBuilder();
-    gb.registerTypeAdapter(
-        java.util.Set.class,
-        new InstanceCreator<java.util.Set<Object>>() {
-          @Override
-          public Set<Object> createInstance(final Type arg0) {
-            return new HashSet<>();
-          }
-        });
-    gb.registerTypeAdapterFactory(new MBMapTypeAdapterFactory(constructorConstructor));
-    //gb.registerTypeAdapter(java.util.Map.class, new MapDeserializer());
-    gb.registerTypeAdapter(java.sql.Date.class, new SqlDateDeserializer());
-    gb.registerTypeAdapter(java.sql.Timestamp.class, new SqlTimestampDeserializer());
+    final GsonBuilder gb = new GsonBuilder()
+            .registerTypeAdapter(
+                    java.util.Set.class,
+                    new InstanceCreator<java.util.Set<Object>>() {
+                      @Override
+                      public Set<Object> createInstance(final Type arg0) {
+                        return new HashSet<>();
+                      }
+                    })
+            .setDateFormat(2, 2)
+            .registerTypeAdapterFactory(new MBMapTypeAdapterFactory(constructorConstructor))
+            .registerTypeAdapter(java.sql.Date.class, new SqlDateDeserializer())
+            .registerTypeAdapter(Date.class, new JavaDateDeserializer())
+            .registerTypeAdapter(java.sql.Timestamp.class, new SqlTimestampDeserializer());
     return gb;
   }
 

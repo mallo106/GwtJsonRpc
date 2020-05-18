@@ -103,7 +103,7 @@ public abstract class JsonServlet<CallType extends ActiveCall> extends HttpServl
                     })
             .setDateFormat(2, 2)
             .registerTypeAdapterFactory(new MBMapTypeAdapterFactory(constructorConstructor))
-            .registerTypeAdapter(java.sql.Date.class, new SqlDateDeserializer())
+            .registerTypeAdapter(java.sql.Date.class, new JavaDateDeserializer())
             .registerTypeAdapter(Date.class, new JavaDateDeserializer())
             .registerTypeAdapter(java.sql.Timestamp.class, new SqlTimestampDeserializer());
     return gb;

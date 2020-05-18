@@ -7,14 +7,17 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="gwtjsonrpc" />
+        <module name="GwtJsonRpc" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
+      <module name="GwtJsonRpc" target="1.8" />
       <module name="gwtjsonrpc" target="1.8" />
     </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="GwtJsonRpc" options="-Xlint:deprecation" />
       <module name="gwtjsonrpc" options="-Xlint:deprecation" />
     </option>
   </component>

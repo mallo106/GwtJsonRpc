@@ -15,8 +15,6 @@
 package com.google.gwtjsonrpc.client.impl.ser;
 
 import com.google.gwt.core.client.JavaScriptObject;
-import com.google.gwt.regexp.shared.MatchResult;
-import com.google.gwt.regexp.shared.RegExp;
 import com.google.gwtjsonrpc.client.impl.JsonSerializer;
 import com.google.gwtjsonrpc.client.impl.ResultDeserializer;
 import java.util.Date;
@@ -25,34 +23,18 @@ import java.util.Date;
 public final class JavaUtilDate_JsonSerializer extends JsonSerializer<java.util.Date>
     implements ResultDeserializer<java.util.Date> {
   public static final JavaUtilDate_JsonSerializer INSTANCE = new JavaUtilDate_JsonSerializer();
-  RegExp regExp = RegExp.compile("(.*GMT[+-]\\d{1,2})(\\d{2}.*)");
 
   @Override
   public java.util.Date fromJson(final Object o) {
     if (o != null) {
-      return parse((String) o);
+      return new Date(new Long(o + ""));
     }
     return null;
   }
 
   @Override
   public void printJson(final StringBuilder sb, final java.util.Date o) {
-    sb.append('"');
-    String aDate = o.toString();
-    MatchResult matcher = regExp.exec(aDate);
-    if (matcher == null)
-    {
-      sb.append(aDate);
-    } else
-    {
-      sb.append(matcher.getGroup(1) + ":" +  matcher.getGroup(2));
-    }
-    sb.append('"');
-  }
-
-  @SuppressWarnings("deprecation")
-  private static Date parse(final String o) {
-    return new java.util.Date(o);
+    sb.append(o.getTime());
   }
 
   @Override

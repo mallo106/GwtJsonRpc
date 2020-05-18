@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/gwtjsonrpc.iml" filepath="$PROJECT_DIR$/gwtjsonrpc.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/GwtJsonRpc.iml" filepath="$PROJECT_DIR$/.idea/GwtJsonRpc.iml" />
     </modules>
   </component>
 </project>

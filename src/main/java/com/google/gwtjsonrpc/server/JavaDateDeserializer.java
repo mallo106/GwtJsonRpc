@@ -2,6 +2,7 @@ package com.google.gwtjsonrpc.server;
 
 import com.google.gson.*;
 import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 
 import java.io.IOException;
@@ -11,7 +12,7 @@ public class JavaDateDeserializer
         extends TypeAdapter<Date> {
     @Override
     public void write(JsonWriter out, Date value) throws IOException {
-        if(value != null) {
+        if (value != null) {
             out.value(value.getTime());
         }
         else {
@@ -21,13 +22,9 @@ public class JavaDateDeserializer
 
     @Override
     public Date read(JsonReader in) throws IOException {
-        if (in == null) {
+        if (in == null || in.peek() == JsonToken.NULL) {
             return null;
         }
-        Long aLong = in.nextLong();
-        if (aLong == null) {
-            return null;
-        }
-        return new Date(aLong);
+        return new Date(in.nextLong());
     }
 }
